@@ -1,26 +1,83 @@
 use std::{
+    convert::TryFrom,
     env, fs,
     path::{Path, PathBuf},
     println,
 };
 
-#[cfg(all(target_os = "linux", feature = "linux-pkg-config"))]
-fn link_pkg_config(name: &str) -> Vec<PathBuf> {
-    // sometimes an override is needed
-    let pc_name = match name {
-        "libvpx" => "vpx",
-        _ => name,
-    };
-    let lib = pkg_config::probe_library(pc_name)
-        .expect(format!(
-            "unable to find '{pc_name}' development headers with pkg-config (feature linux-pkg-config is enabled).
-            try installing '{pc_name}-dev' from your system package manager.").as_str());
-
-    lib.include_paths
+fn pc_names(name: &str) -> Vec<&str> {
+    match name {
+        "libvpx" => vec!["vpx"],
+        // Debian's libyuv-dev ships the library and headers with no .pc file.
+        "libyuv" => vec!["libyuv", "yuv"],
+        other => vec![other],
+    }
 }
-#[cfg(not(all(target_os = "linux", feature = "linux-pkg-config")))]
-fn link_pkg_config(_name: &str) -> Vec<PathBuf> {
-    unimplemented!()
+
+fn dev_package(name: &str) -> &'static str {
+    match name {
+        "libvpx" => "libvpx-dev",
+        "aom" => "libaom-dev",
+        "libyuv" => "libyuv-dev",
+        _ => "the matching -dev package",
+    }
+}
+
+/// Path inside the target sysroot. A native build uses the host root.
+fn in_sysroot(absolute: &str) -> PathBuf {
+    match env::var("PKG_CONFIG_SYSROOT_DIR") {
+        Ok(root) if !root.is_empty() => Path::new(&root).join(absolute.trim_start_matches('/')),
+        _ => PathBuf::from(absolute),
+    }
+}
+
+/// Debian installs libyuv without a pkg-config file. The shared library and
+/// headers from libyuv-dev are still enough to link it.
+fn link_unpackaged_libyuv() -> Option<Vec<PathBuf>> {
+    let header = in_sysroot("/usr/include/libyuv.h");
+    if !header.is_file() {
+        return None;
+    }
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let multiarch = match arch.as_str() {
+        "x86_64" => Some("x86_64-linux-gnu"),
+        "aarch64" => Some("aarch64-linux-gnu"),
+        "arm" => Some("arm-linux-gnueabihf"),
+        _ => None,
+    };
+    let mut dirs = Vec::new();
+    if let Some(tuple) = multiarch {
+        dirs.push(in_sysroot(&format!("/usr/lib/{tuple}")));
+    }
+    dirs.push(in_sysroot("/usr/lib"));
+    dirs.push(in_sysroot("/usr/lib64"));
+    for dir in &dirs {
+        if dir.join("libyuv.so").is_file() {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+            println!("cargo:rustc-link-lib=dylib=yuv");
+            return Some(vec![in_sysroot("/usr/include")]);
+        }
+    }
+    None
+}
+
+fn link_pkg_config(name: &str) -> Vec<PathBuf> {
+    for pc_name in pc_names(name) {
+        if let Ok(lib) = pkg_config::probe_library(pc_name) {
+            return lib.include_paths;
+        }
+    }
+    if name == "libyuv" {
+        if let Some(paths) = link_unpackaged_libyuv() {
+            return paths;
+        }
+    }
+    let tried = pc_names(name).join(", ");
+    panic!(
+        "unable to find '{}' from the installed development package.\n            install {} so this build can link the system library. Bundled codec sources are not compiled.",
+        tried,
+        dev_package(name)
+    );
 }
 
 /// Link vcpkg package.
@@ -119,15 +176,14 @@ fn link_homebrew_m1(name: &str) -> PathBuf {
     include
 }
 
-/// Find package. By default, it will try to find vcpkg first, then homebrew(currently only for Mac M1).
-/// If building for linux and feature "linux-pkg-config" is enabled, will try to use pkg-config
-/// unless check fails (e.g. NO_PKG_CONFIG_libyuv=1)
+/// Find package. On Linux this is the installed library and its -dev headers.
+/// Elsewhere it tries vcpkg, then homebrew (currently only for Mac M1).
+/// Set NO_PKG_CONFIG_<name>=1 to skip the system package on Linux.
 fn find_package(name: &str) -> Vec<PathBuf> {
     let no_pkg_config_var_name = format!("NO_PKG_CONFIG_{name}");
     println!("cargo:rerun-if-env-changed={no_pkg_config_var_name}");
-    if cfg!(all(target_os = "linux", feature = "linux-pkg-config"))
-        && std::env::var(no_pkg_config_var_name).as_deref() != Ok("1")
-    {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "linux" && std::env::var(&no_pkg_config_var_name).as_deref() != Ok("1") {
         link_pkg_config(name)
     } else if let Ok(vcpkg_root) = std::env::var("VCPKG_ROOT") {
         vec![link_vcpkg(vcpkg_root.into(), name)]
@@ -159,6 +215,9 @@ fn generate_bindings(
     }
 
     b.generate().unwrap().write_to_file(ffi_rs).unwrap();
+    if let Some(parent) = exact_file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     fs::copy(ffi_rs, exact_file).ok(); // ignore failure
 }
 
@@ -226,6 +285,111 @@ fn ffmpeg() {
 }
 */
 
+/// ABI version from the installed -dev headers, so encoder init matches the linked library.
+fn export_linked_abi(header: &str, macro_name: &str, env_key: &str, includes: &[PathBuf]) {
+    let value = read_header_macro(header, macro_name, includes).unwrap_or_else(|| {
+        panic!(
+            "{} from the installed development package does not define {}. This build does not compile a bundled codec.",
+            header, macro_name
+        )
+    });
+    println!("cargo:rustc-env={env_key}={value}");
+}
+
+fn read_header_macro(header: &str, macro_name: &str, includes: &[PathBuf]) -> Option<u32> {
+    let target = env::var("TARGET").unwrap_or_default();
+    let specific = format!("CC_{}", target.replace('-', "_"));
+    let cc = env::var(&specific)
+        .or_else(|_| env::var("CC"))
+        .unwrap_or_else(|_| "cc".to_owned());
+    let mut cmd = std::process::Command::new(cc);
+    cmd.arg("-E").arg("-P");
+    for dir in includes {
+        cmd.arg(format!("-I{}", dir.display()));
+    }
+    cmd.arg("-")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let mut child = cmd.spawn().ok()?;
+    {
+        let stdin = child.stdin.as_mut()?;
+        let src = format!("#include <{header}>\n{macro_name}\n");
+        std::io::Write::write_all(stdin, src.as_bytes()).ok()?;
+    }
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let expr = text.lines().last()?.trim();
+    eval_int_expr(expr)
+}
+
+fn eval_int_expr(expr: &str) -> Option<u32> {
+    fn eval(tokens: &mut &str) -> Option<i64> {
+        let mut acc = eval_term(tokens)?;
+        loop {
+            let s = tokens.trim_start();
+            if let Some(rest) = s.strip_prefix('+') {
+                *tokens = rest;
+                acc += eval_term(tokens)?;
+            } else {
+                *tokens = s;
+                break;
+            }
+        }
+        Some(acc)
+    }
+    fn eval_term(tokens: &mut &str) -> Option<i64> {
+        let s = tokens.trim_start();
+        if let Some(rest) = s.strip_prefix('(') {
+            *tokens = rest;
+            let v = eval(tokens)?;
+            let s = tokens.trim_start();
+            *tokens = s.strip_prefix(')')?;
+            return Some(v);
+        }
+        let s = tokens.trim_start();
+        let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            return None;
+        }
+        *tokens = &s[digits.len()..];
+        digits.parse().ok()
+    }
+    let mut tokens = expr;
+    let value = eval(&mut tokens)?;
+    if !tokens.trim().is_empty() {
+        return None;
+    }
+    u32::try_from(value).ok()
+}
+
+fn install_one_ffi(ffi_header: &str, generated: &str, regex: &str, includes: &[PathBuf]) {
+    let src_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let pregenerated = src_dir.join("generated").join(generated);
+    let ffi_rs = out_dir.join(generated);
+    println!("cargo:rerun-if-env-changed=SCRAP_REGEN_BINDINGS");
+    if pregenerated.exists() && env::var("SCRAP_REGEN_BINDINGS").is_err() {
+        let width = env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap_or_default();
+        if width != "64" {
+            panic!(
+                "checked-in codec bindings are for 64-bit targets. This build is {}-bit. Set SCRAP_REGEN_BINDINGS=1 to generate bindings for this target (the build host needs libclang).",
+                width
+            );
+        }
+        println!("cargo:rerun-if-changed={}", pregenerated.display());
+        fs::copy(&pregenerated, &ffi_rs)
+            .unwrap_or_else(|e| panic!("copy {}: {}", pregenerated.display(), e));
+        return;
+    }
+    let header = src_dir.join("src").join("bindings").join(ffi_header);
+    println!("cargo:rerun-if-changed={}", header.display());
+    generate_bindings(&header, includes, &ffi_rs, &pregenerated, regex);
+}
+
 fn main() {
     // in this crate, these are also valid configurations
     println!("cargo:rustc-check-cfg=cfg(dxgi,quartz,x11)");
@@ -244,10 +408,44 @@ fn main() {
     env::remove_var("CARGO_CFG_TARGET_FEATURE");
     env::set_var("CARGO_CFG_TARGET_FEATURE", "crt-static");
 
-    find_package("libyuv");
-    gen_vcpkg_package("libvpx", "vpx_ffi.h", "vpx_ffi.rs", "^[vV].*");
-    gen_vcpkg_package("aom", "aom_ffi.h", "aom_ffi.rs", "^(aom|AOM|OBU|AV1).*");
-    gen_vcpkg_package("libyuv", "yuv_ffi.h", "yuv_ffi.rs", ".*");
+    if target_os == "linux" {
+        // Shared libraries and headers from the distro -dev packages.
+        let vpx_inc = find_package("libvpx");
+        let aom_inc = find_package("aom");
+        let yuv_inc = find_package("libyuv");
+        export_linked_abi(
+            "vpx/vpx_encoder.h",
+            "VPX_ENCODER_ABI_VERSION",
+            "LINKED_VPX_ENCODER_ABI",
+            &vpx_inc,
+        );
+        export_linked_abi(
+            "vpx/vpx_decoder.h",
+            "VPX_DECODER_ABI_VERSION",
+            "LINKED_VPX_DECODER_ABI",
+            &vpx_inc,
+        );
+        export_linked_abi(
+            "aom/aom_encoder.h",
+            "AOM_ENCODER_ABI_VERSION",
+            "LINKED_AOM_ENCODER_ABI",
+            &aom_inc,
+        );
+        export_linked_abi(
+            "aom/aom_decoder.h",
+            "AOM_DECODER_ABI_VERSION",
+            "LINKED_AOM_DECODER_ABI",
+            &aom_inc,
+        );
+        install_one_ffi("vpx_ffi.h", "vpx_ffi.rs", "^[vV].*", &vpx_inc);
+        install_one_ffi("aom_ffi.h", "aom_ffi.rs", "^(aom|AOM|OBU|AV1).*", &aom_inc);
+        install_one_ffi("yuv_ffi.h", "yuv_ffi.rs", ".*", &yuv_inc);
+    } else {
+        find_package("libyuv");
+        gen_vcpkg_package("libvpx", "vpx_ffi.h", "vpx_ffi.rs", "^[vV].*");
+        gen_vcpkg_package("aom", "aom_ffi.h", "aom_ffi.rs", "^(aom|AOM|OBU|AV1).*");
+        gen_vcpkg_package("libyuv", "yuv_ffi.h", "yuv_ffi.rs", ".*");
+    }
     // ffmpeg();
 
     if target_os == "ios" {
@@ -260,8 +458,7 @@ fn main() {
     } else if cfg!(target_os = "macos") {
         // Quartz is second because macOS is the (annoying) exception.
         println!("cargo:rustc-cfg=quartz");
-    } else if cfg!(unix) {
-        // On UNIX we pray that X11 (with XCB) is available.
+    } else if cfg!(all(unix, feature = "x11")) {
         println!("cargo:rustc-cfg=x11");
     }
 }
