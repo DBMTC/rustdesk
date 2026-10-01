@@ -30,6 +30,10 @@ fn main() -> std::process::ExitCode {
     // as a non-zero process exit status for CLI callers.
     let exit_code = match crate::core_main::core_main() {
         Some(crate::core_main::CoreMainAction::StartUi(mut args)) => {
+            // Linux is compiled headless. The host service started above keeps running.
+            #[cfg(target_os = "linux")]
+            run_linux_service(&args);
+            #[cfg(not(target_os = "linux"))]
             ui::start(&mut args);
             std::process::ExitCode::SUCCESS
         }
@@ -42,4 +46,25 @@ fn main() -> std::process::ExitCode {
     };
     common::global_clean();
     exit_code
+}
+
+#[cfg(all(target_os = "linux", not(feature = "flutter")))]
+fn run_linux_service(args: &[String]) {
+    let headless = args.is_empty()
+        || args
+            .first()
+            .is_some_and(|arg| common::is_empty_uni_link(arg));
+    if !headless {
+        eprintln!(
+            "`{}` needs a UI, but rustdesk has been compiled headless.",
+            args[0]
+        );
+        std::process::exit(1);
+    }
+    std::thread::spawn(ipc::start_pa);
+    let id = hbb_common::config::Config::get_id();
+    eprintln!("RustDesk host service is running. ID: {id}");
+    loop {
+        std::thread::park();
+    }
 }
