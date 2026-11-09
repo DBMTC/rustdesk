@@ -2509,7 +2509,7 @@ dependencies = [
  "log",
  "objc",
  "pkg-config",
- "rdev 0.5.0-2",
+ "rdev",
  "serde 1.0.228",
  "serde_derive",
  "tfc",
@@ -3205,7 +3205,7 @@ dependencies = [
  "glib-sys 0.18.1",
  "libc",
  "system-deps 6.2.2",
- "x11 2.21.0",
+ "x11",
 ]
 
 [[package]]
@@ -3740,7 +3740,7 @@ dependencies = [
  "webpki-roots 1.0.11",
  "webrtc",
  "whoami",
- "x11 2.21.0",
+ "x11",
  "zstd",
 ]
 
@@ -6762,31 +6762,7 @@ dependencies = [
 [[package]]
 name = "rdev"
 version = "0.5.0-2"
-dependencies = [
- "cocoa 0.24.1",
- "core-foundation 0.9.4",
- "core-foundation-sys 0.8.7",
- "core-graphics 0.22.3",
- "dispatch",
- "enum-map",
- "epoll",
- "inotify",
- "lazy_static",
- "libc",
- "log",
- "mio 0.8.11",
- "rdev 0.5.0-2 (git+https://github.com/rustdesk-org/rdev)",
- "serde 1.0.228",
- "strum 0.24.1",
- "strum_macros 0.24.3",
- "widestring",
- "winapi 0.3.9",
-]
-
-[[package]]
-name = "rdev"
-version = "0.5.0-2"
-source = "git+https://github.com/rustdesk-org/rdev#0904f23ce496e255461a98848b85c11fa5a62eab"
+source = "git+https://github.com/DBMTC/rdev#0904f23ce496e255461a98848b85c11fa5a62eab"
 dependencies = [
  "cocoa 0.24.1",
  "core-foundation 0.9.4",
@@ -6804,7 +6780,7 @@ dependencies = [
  "strum_macros 0.24.3",
  "widestring",
  "winapi 0.3.9",
- "x11 2.21.0",
+ "x11",
 ]
 
 [[package]]
@@ -7165,7 +7141,7 @@ dependencies = [
  "piet-coregraphics",
  "portable-pty",
  "qrcode-generator",
- "rdev 0.5.0-2",
+ "rdev",
  "remote_printer",
  "repng",
  "reqwest",
@@ -8390,13 +8366,10 @@ dependencies = [
 [[package]]
 name = "tfc"
 version = "0.7.0"
-source = "git+https://github.com/rustdesk-org/The-Fat-Controller?branch=history/rebase_upstream_20240722#78bb80a8e596e4c14ae57c8448f5fca75f91f2b0"
+source = "git+https://github.com/DBMTC/The-Fat-Controller?branch=master#bf1537f3d53b11d67cc2c04bc0f7edb1da9f77c7"
 dependencies = [
- "anyhow",
  "core-graphics 0.23.2",
  "unicode-segmentation",
- "winapi 0.3.9",
- "x11 2.19.0",
 ]
 
 [[package]]
@@ -10658,15 +10631,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
 dependencies = [
  "tap",
-]
-
-[[package]]
-name = "x11"
-version = "2.19.0"
-source = "git+https://github.com/bjornsnoen/x11-rs#c2e9bfaa7b196938f8700245564d8ac5d447786a"
-dependencies = [
- "libc",
- "pkg-config",
 ]
 
 [[package]]

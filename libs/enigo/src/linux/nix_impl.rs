@@ -18,6 +18,11 @@ pub struct Enigo {
     custom_mouse: Option<CustomMouce>,
 }
 
+// The Fat Controller's X11 context stores libX11 pointers. Enigo is only shared
+// through a mutex, which is what `Send` is asserting here.
+#[cfg(feature = "x11")]
+unsafe impl Send for Enigo {}
+
 impl Enigo {
     /// Get delay of xdo implementation.
     pub fn delay(&self) -> u64 {
@@ -51,13 +56,9 @@ impl Enigo {
         self.is_x11 = is_x11;
     }
 
-    /// Clear remapped keycodes
+    /// Clear remapped keycodes. DBMTC/The-Fat-Controller does not keep a remap table.
     #[cfg(feature = "x11")]
-    pub fn tfc_clear_remapped(&mut self) {
-        if let Some(tfc) = &mut self.tfc {
-            tfc.recover_remapped_keycodes();
-        }
-    }
+    pub fn tfc_clear_remapped(&mut self) {}
 
     /// Clear remapped keycodes. No-op when tfc is not built.
     #[cfg(not(feature = "x11"))]
@@ -387,14 +388,8 @@ fn convert_to_tfc_key(key: Key) -> Option<TFC_Key> {
         Key::Numpad9 => TFC_Key::N9,
         Key::Decimal => TFC_Key::NumpadDecimal,
         Key::Clear => TFC_Key::NumpadClear,
-        Key::Pause => TFC_Key::Pause,
-        Key::Print => TFC_Key::Print,
-        Key::Snapshot => TFC_Key::PrintScreen,
         Key::Insert => TFC_Key::Insert,
-        Key::Scroll => TFC_Key::ScrollLock,
-        Key::NumLock => TFC_Key::NumLock,
         Key::RWin => TFC_Key::Meta,
-        Key::Apps => TFC_Key::Apps,
         Key::Multiply => TFC_Key::NumpadMultiply,
         Key::Add => TFC_Key::NumpadPlus,
         Key::Subtract => TFC_Key::NumpadMinus,
