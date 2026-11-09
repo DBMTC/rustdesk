@@ -5,18 +5,63 @@ use std::{
 };
 
 #[cfg(all(target_os = "linux", feature = "linux-pkg-config"))]
-fn link_pkg_config(name: &str) -> Vec<PathBuf> {
-    // sometimes an override is needed
-    let pc_name = match name {
-        "libvpx" => "vpx",
-        _ => name,
-    };
-    let lib = pkg_config::probe_library(pc_name)
-        .expect(format!(
-            "unable to find '{pc_name}' development headers with pkg-config (feature linux-pkg-config is enabled).
-            try installing '{pc_name}-dev' from your system package manager.").as_str());
+fn pc_names(name: &str) -> Vec<&str> {
+    match name {
+        "libvpx" => vec!["vpx"],
+        // Debian's libyuv-dev ships the library and headers with no .pc file.
+        "libyuv" => vec!["libyuv", "yuv"],
+        other => vec![other],
+    }
+}
 
-    lib.include_paths
+/// Debian installs libyuv without a pkg-config file. Native builds can still link it.
+#[cfg(all(target_os = "linux", feature = "linux-pkg-config"))]
+fn link_unpackaged_libyuv() -> Option<Vec<PathBuf>> {
+    if env::var("HOST").ok() != env::var("TARGET").ok() {
+        return None;
+    }
+    if !Path::new("/usr/include/libyuv.h").is_file() {
+        return None;
+    }
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let multiarch = match arch.as_str() {
+        "x86_64" => Some("x86_64-linux-gnu"),
+        "aarch64" => Some("aarch64-linux-gnu"),
+        "arm" => Some("arm-linux-gnueabihf"),
+        _ => None,
+    };
+    let mut dirs = Vec::new();
+    if let Some(tuple) = multiarch {
+        dirs.push(format!("/usr/lib/{tuple}"));
+    }
+    dirs.push("/usr/lib".to_string());
+    for dir in &dirs {
+        if Path::new(dir).join("libyuv.so").is_file() {
+            println!("cargo:rustc-link-search=native={dir}");
+            println!("cargo:rustc-link-lib=dylib=yuv");
+            return Some(vec![PathBuf::from("/usr/include")]);
+        }
+    }
+    None
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-pkg-config"))]
+fn link_pkg_config(name: &str) -> Vec<PathBuf> {
+    for pc_name in pc_names(name) {
+        if let Ok(lib) = pkg_config::probe_library(pc_name) {
+            return lib.include_paths;
+        }
+    }
+    if name == "libyuv" {
+        if let Some(paths) = link_unpackaged_libyuv() {
+            return paths;
+        }
+    }
+    let tried = pc_names(name).join(", ");
+    panic!(
+        "unable to find '{tried}' development headers with pkg-config (feature linux-pkg-config is enabled).
+            try installing the matching -dev package from your system package manager."
+    );
 }
 #[cfg(not(all(target_os = "linux", feature = "linux-pkg-config")))]
 fn link_pkg_config(_name: &str) -> Vec<PathBuf> {
