@@ -1260,11 +1260,13 @@ fn weston_node_capturables() -> Result<Vec<PipeWireCapturable>, Box<dyn Error>> 
         position: (0, 0),
         logical_size: (0, 0),
         physical_size: (0, 0),
+        physical_size_measured: false,
     };
     let physical_size = get_res_timeout(provisional.clone(), 5000)?;
     Ok(vec![PipeWireCapturable {
         physical_size,
         logical_size: physical_size,
+        physical_size_measured: true,
         ..provisional
     }])
 }
