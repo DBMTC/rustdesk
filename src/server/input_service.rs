@@ -2489,7 +2489,7 @@ pub fn handle_key_(evt: &KeyEvent) {
         return;
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
     super::uinput::prepare_layout(evt);
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
