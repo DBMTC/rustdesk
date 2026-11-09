@@ -352,8 +352,7 @@ fn main() {
     } else if cfg!(target_os = "macos") {
         // Quartz is second because macOS is the (annoying) exception.
         println!("cargo:rustc-cfg=quartz");
-    } else if cfg!(unix) {
-        // On UNIX we pray that X11 (with XCB) is available.
+    } else if cfg!(all(unix, feature = "x11")) {
         println!("cargo:rustc-cfg=x11");
     }
 }

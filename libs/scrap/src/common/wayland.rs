@@ -4,7 +4,10 @@ use crate::{
 };
 use std::{io, sync::RwLock, time::Duration};
 
+#[cfg(x11)]
 use super::x11::PixelBuffer;
+#[cfg(not(x11))]
+use super::pixel_buffer::PixelBuffer;
 
 pub struct Capturer(Display, Box<dyn Recorder>, Vec<u8>);
 

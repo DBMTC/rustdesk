@@ -83,9 +83,16 @@ pub fn is_desktop_wayland() -> bool {
     get_display_server() == DISPLAY_SERVER_WAYLAND
 }
 
+#[cfg(feature = "x11")]
 #[inline]
 pub fn is_x11_or_headless() -> bool {
     !is_desktop_wayland()
+}
+
+#[cfg(not(feature = "x11"))]
+#[inline]
+pub fn is_x11_or_headless() -> bool {
+    false
 }
 
 // -1

@@ -153,6 +153,10 @@ pub struct PipeWireCapturable {
     fd: OwnedFd,
     path: u64,
     source_type: u64,
+    /// Portal captures pass the PipeWire remote fd and a numeric node id.
+    /// A direct compositor node sets this false and names the node in `target_object`.
+    use_portal_fd: bool,
+    target_object: String,
     pub primary: bool,
     pub position: (i32, i32),
     pub logical_size: (usize, usize),
@@ -173,6 +177,8 @@ impl PipeWireCapturable {
             fd: fd.clone(),
             path: stream.path,
             source_type: stream.source_type,
+            use_portal_fd: true,
+            target_object: String::new(),
             primary: false,
             position: stream.position,
             logical_size: stream.size,
@@ -185,6 +191,8 @@ impl PipeWireCapturable {
             fd,
             path: stream.path,
             source_type: stream.source_type,
+            use_portal_fd: true,
+            target_object: String::new(),
             primary: false,
             position: stream.position,
             logical_size: stream.size,
@@ -230,10 +238,17 @@ impl Capturable for PipeWireCapturable {
 }
 
 fn get_res(capturable: PipeWireCapturable) -> Result<(usize, usize), Box<dyn Error>> {
+    get_res_timeout(capturable, 300)
+}
+
+fn get_res_timeout(
+    capturable: PipeWireCapturable,
+    timeout_ms: u64,
+) -> Result<(usize, usize), Box<dyn Error>> {
     let rec = PipeWireRecorder::new(capturable)?;
     if let Some(sample) = rec
         .appsink
-        .try_pull_sample(gst::ClockTime::from_mseconds(300))
+        .try_pull_sample(gst::ClockTime::from_mseconds(timeout_ms))
     {
         let cap = sample
             .get_caps()
@@ -276,13 +291,25 @@ fn gst_element(name: &str) -> ResultType<gst::Element> {
 
 impl PipeWireRecorder {
     pub fn new(capturable: PipeWireCapturable) -> ResultType<Self> {
+        if let Err(err) = gst::init() {
+            let msg = err.to_string();
+            if !msg.to_ascii_lowercase().contains("already") {
+                return Err(anyhow!("gstreamer init failed: {}", msg));
+            }
+        }
         let pipeline = gst::Pipeline::new(None);
         // Clock waits on stale capture timestamps can exhaust the compositor's buffers.
         pipeline.use_clock(None::<&gst::Clock>);
 
         let src = gst_element("pipewiresrc")?;
-        src.set_property("fd", &capturable.fd.as_raw_fd())?;
-        src.set_property("path", &format!("{}", capturable.path))?;
+        if capturable.use_portal_fd {
+            src.set_property("fd", &capturable.fd.as_raw_fd())?;
+            src.set_property("path", &format!("{}", capturable.path))?;
+        } else {
+            // fd -1 is the element default: connect to the session PipeWire
+            // socket. target-object is the node name.
+            src.set_property("target-object", &capturable.target_object)?;
+        }
         src.set_property("keepalive_time", &1_000.as_raw_fd())?;
 
         // For some reason pipewire blocks on destruction of AppSink if this is not set to true,
@@ -300,6 +327,10 @@ impl PipeWireRecorder {
         let sink = gst_element("appsink")?;
         sink.set_property("drop", &true)?;
         sink.set_property("max-buffers", &1u32)?;
+        // The pipeline clock is disabled. A syncing appsink holds every buffer
+        // after the resolution probe, so the client never gets a frame.
+        sink.set_property("sync", &false)?;
+        sink.set_property("async", &false)?;
 
         pipeline.add_many(&[&src, &convert, &sink])?;
         src.link(&convert)?;
@@ -332,10 +363,14 @@ impl PipeWireRecorder {
 
         // If `is_server_running()` is false, it means using remote_desktop_portal,
         // which does not use multiple streams, so no need to wait for state change.
-        if is_server_running() {
+        // User-session RustDesk is not `rustdesk --server`, so this wait used
+        // to be skipped. A direct node still has to reach PLAYING before a sample
+        // is pulled. Portal captures keep the old server-only wait.
+        if is_server_running() || !capturable.use_portal_fd {
+            let wait_ms = if capturable.use_portal_fd { 2000 } else { 15000 };
             // Wait for the state change to actually complete before proceeding.
             // The 2000ms timeout for pipeline state change was chosen based on empirical testing.
-            let state_change = pipeline.get_state(gst::ClockTime::from_mseconds(2000));
+            let state_change = pipeline.get_state(gst::ClockTime::from_mseconds(wait_ms));
             match state_change {
                 (Ok(_), gst::State::Playing, _) => {
                     debug!(
@@ -344,6 +379,12 @@ impl PipeWireRecorder {
                     );
                 }
                 (result, state, pending) => {
+                    if !capturable.use_portal_fd {
+                        return Err(anyhow!(
+                            "screen node {} did not start ({:?} {:?} pending {:?})",
+                            capturable.target_object, result, state, pending
+                        ));
+                    }
                     warn!(
                     "[gstreamer] Pipeline {} state change incomplete: result={:?}, state={:?}, pending={:?}",
                     capturable.fd.as_raw_fd(), result, state, pending
@@ -365,6 +406,45 @@ impl PipeWireRecorder {
             saved_raw_data: Vec::new(),
         })
     }
+}
+
+fn pack_bgrx(
+    data: &[u8],
+    meta_stride: usize,
+    width: usize,
+    height: usize,
+    crop: Option<(u32, u32, u32, u32)>,
+) -> Option<Vec<u8>> {
+    let (x, y, w, h) = match crop {
+        Some((x, y, w, h)) => (x as usize, y as usize, w as usize, h as usize),
+        None => (0, 0, width, height),
+    };
+    let row = w.checked_mul(4)?;
+    if w == 0 || h == 0 || row == 0 {
+        return None;
+    }
+    let mut stride = meta_stride;
+    if stride < width.saturating_mul(4) {
+        if height > 0 && data.len() >= height && data.len() % height == 0 {
+            stride = data.len() / height;
+        } else {
+            stride = width.saturating_mul(4);
+        }
+    }
+    let x_bytes = x.checked_mul(4)?;
+    if stride < x_bytes.checked_add(row)? {
+        return None;
+    }
+    let last = y.checked_add(h)?.checked_mul(stride)?;
+    if data.len() < last {
+        return None;
+    }
+    let mut out = Vec::with_capacity(row.checked_mul(h)?);
+    for row_index in y..(y + h) {
+        let start = stride * row_index + x_bytes;
+        out.extend_from_slice(&data[start..start + row]);
+    }
+    Some(out)
 }
 
 impl Recorder for PipeWireRecorder {
@@ -393,59 +473,41 @@ impl Recorder for PipeWireRecorder {
             let mut crop = buf
                 .get_meta::<gstreamer_video::VideoCropMeta>()
                 .map(|m| m.get_rect());
-            // only crop if necessary
             if Some((0, 0, w as u32, h as u32)) == crop {
                 crop = None;
             }
+            let meta_stride = buf
+                .get_meta::<gstreamer_video::VideoMeta>()
+                .and_then(|meta| meta.get_stride().first().copied())
+                .map(|stride| stride.max(0) as usize)
+                .unwrap_or(0);
             let buf = buf
                 .into_mapped_buffer_readable()
                 .map_err(|_| GStreamerError("Failed to map buffer.".into()))?;
-            if let Err(..) = crate::would_block_if_equal(&mut self.saved_raw_data, buf.as_slice()) {
+            // Pack to width*4 before comparing. A padded stride used to fail the
+            // size check after would_block had already stored the bytes, so every
+            // later identical frame was skipped.
+            let packed = match pack_bgrx(buf.as_slice(), meta_stride, w, h, crop) {
+                Some(packed) => packed,
+                None => return Ok(PixelProvider::NONE),
+            };
+            if let Err(..) = crate::would_block_if_equal(&mut self.saved_raw_data, &packed) {
                 return Ok(PixelProvider::NONE);
             }
-            let buf_size = buf.get_size();
-            // BGRx is 4 bytes per pixel
-            if buf_size != (w * h * 4) {
-                // for some reason the width and height of the caps do not guarantee correct buffer
-                // size, so ignore those buffers, see:
-                // https://gitlab.freedesktop.org/pipewire/pipewire/-/issues/985
-                trace!(
-                    "Size of mapped buffer: {} does NOT match size of capturable {}x{}@BGRx, \
-                    dropping it!",
-                    buf_size,
-                    w,
-                    h
-                );
-            } else {
-                // Copy region specified by crop into self.buffer_cropped
-                // TODO: Figure out if ffmpeg provides a zero copy alternative
-                if let Some((x_off, y_off, w_crop, h_crop)) = crop {
-                    let x_off = x_off as usize;
-                    let y_off = y_off as usize;
-                    let w_crop = w_crop as usize;
-                    let h_crop = h_crop as usize;
-                    self.buffer_cropped.clear();
-                    let data = buf.as_slice();
-                    // BGRx is 4 bytes per pixel
-                    self.buffer_cropped.reserve(w_crop * h_crop * 4);
-                    for y in y_off..(y_off + h_crop) {
-                        let i = 4 * (w * y + x_off);
-                        self.buffer_cropped.extend(&data[i..i + 4 * w_crop]);
-                    }
-                    self.width = w_crop;
-                    self.height = h_crop;
-                } else {
-                    self.width = w;
-                    self.height = h;
-                }
-                self.is_cropped = crop.is_some();
-                self.buffer = Some(buf);
-            }
+            let (packed_w, packed_h) = match crop {
+                Some((_, _, cw, ch)) => (cw as usize, ch as usize),
+                None => (w, h),
+            };
+            self.buffer_cropped = packed;
+            self.width = packed_w;
+            self.height = packed_h;
+            self.is_cropped = true;
+            self.buffer = Some(buf);
         } else {
             return Ok(PixelProvider::NONE);
         }
         if self.buffer.is_none() {
-            return Err(Box::new(GStreamerError("No buffer available!".into())));
+            return Ok(PixelProvider::NONE);
         }
         let buf = if self.is_cropped {
             self.buffer_cropped.as_slice()
@@ -456,12 +518,12 @@ impl Recorder for PipeWireRecorder {
                 .as_slice()
         };
         match self.pix_fmt.as_str() {
-            "BGRx" => Ok(PixelProvider::BGR0(self.width, self.height, buf)),
-            "RGBx" => Ok(PixelProvider::RGB0(self.width, self.height, buf)),
-            _ => Err(Box::new(GStreamerError(format!(
-                "Unreachable! Unknown pix_fmt, {}",
-                &self.pix_fmt
-            )))),
+            "BGRx" | "BGRA" => Ok(PixelProvider::BGR0(self.width, self.height, buf)),
+            "RGBx" | "RGBA" => Ok(PixelProvider::RGB0(self.width, self.height, buf)),
+            _ => {
+                warn!("screen capture format {} is not BGRx/RGBx", self.pix_fmt);
+                Ok(PixelProvider::NONE)
+            }
         }
     }
 }
@@ -1127,7 +1189,89 @@ fn on_start_response(
     }
 }
 
+#[cfg(feature = "yocto")]
+fn weston_pipewire_node() -> String {
+    match std::env::var("RUSTDESK_PIPEWIRE_NODE") {
+        Ok(name) => name,
+        Err(_) => "weston.pipewire".to_string(),
+    }
+}
+
+#[cfg(feature = "yocto")]
+fn ensure_remote_input_session() {
+    {
+        let existing = match RDP_SESSION_INFO.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        if existing.is_some() {
+            return;
+        }
+    }
+    match request_remote_desktop(false) {
+        Ok((conn, fd, streams, session, is_support_restore_token)) => {
+            let mut guard = match RDP_SESSION_INFO.lock() {
+                Ok(guard) => guard,
+                Err(_) => return,
+            };
+            if guard.is_none() {
+                *guard = Some(RdpSessionInfo {
+                    conn: Arc::new(conn),
+                    streams,
+                    fd,
+                    session,
+                    is_support_restore_token,
+                    resolution: Arc::new(Mutex::new(None)),
+                });
+            }
+        }
+        Err(err) => warn!("remote input session was not opened ({})", err),
+    }
+}
+
+/// Weston stays the KMS client and mirrors the output onto a PipeWire node.
+#[cfg(feature = "yocto")]
+fn weston_node_capturables() -> Result<Vec<PipeWireCapturable>, Box<dyn Error>> {
+    use std::os::unix::io::IntoRawFd;
+
+    let node = weston_pipewire_node();
+    if node.is_empty() || node == "none" {
+        return Ok(Vec::new());
+    }
+    let conn = Arc::new(SyncConnection::new_session()?);
+    let raw = std::fs::File::open("/dev/null")?.into_raw_fd();
+    let fd = unsafe { OwnedFd::new(raw) };
+    let provisional = PipeWireCapturable {
+        dbus_conn: conn,
+        fd,
+        path: 0,
+        source_type: 1,
+        use_portal_fd: false,
+        target_object: node,
+        primary: true,
+        position: (0, 0),
+        logical_size: (0, 0),
+        physical_size: (0, 0),
+    };
+    let physical_size = get_res_timeout(provisional.clone(), 5000)?;
+    Ok(vec![PipeWireCapturable {
+        physical_size,
+        logical_size: physical_size,
+        ..provisional
+    }])
+}
+
 pub fn get_capturables() -> Result<Vec<PipeWireCapturable>, Box<dyn Error>> {
+    #[cfg(feature = "yocto")]
+    match weston_node_capturables() {
+        Ok(list) if !list.is_empty() => {
+            ensure_remote_input_session();
+            return Ok(list);
+        }
+        Ok(_) => {}
+        Err(err) => warn!("weston pipewire node not usable ({}); using the portal", err),
+    }
+
     let mut rdp_connection = match RDP_SESSION_INFO.lock() {
         Ok(conn) => conn,
         Err(err) => return Err(Box::new(err)),
@@ -1601,6 +1745,8 @@ fn fill_multi_matched_positions_cursor(
                     fd: fd.clone(),
                     path: pw_stream_with_cursor.path,
                     source_type: pw_stream_with_cursor.source_type,
+                    use_portal_fd: true,
+                    target_object: String::new(),
                     primary: false,
                     position: pw_stream_with_cursor.position,
                     logical_size: pw_stream_with_cursor.size,

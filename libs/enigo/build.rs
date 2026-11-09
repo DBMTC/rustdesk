@@ -4,18 +4,18 @@ fn main() {}
 #[cfg(target_os = "macos")]
 fn main() {}
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "x11"))]
 use pkg_config;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "x11"))]
 use std::env;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "x11"))]
 use std::fs::File;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "x11"))]
 use std::io::Write;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "x11"))]
 use std::path::Path;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "x11"))]
 fn main() {
     let libraries = [
         "xext",
@@ -58,4 +58,9 @@ fn main() {
     } else if target.contains("freebsd") || target.contains("dragonfly") {
         println!("cargo:rustc-link-lib=c");
     }
+}
+
+#[cfg(all(target_os = "linux", not(feature = "x11")))]
+fn main() {
+    println!("cargo:rustc-link-lib=dl");
 }
