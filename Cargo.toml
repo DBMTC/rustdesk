@@ -26,7 +26,15 @@ use_samplerate = ["samplerate", "libsamplerate-sys"]
 use_rubato = ["rubato"]
 use_dasp = ["dasp"]
 flutter = ["flutter_rust_bridge"]
-default = ["use_dasp"]
+default = ["use_dasp", "x11", "wayland", "tray"]
+# X11 capture and input. Off for a Wayland-only build; `is_x11()` is then false.
+x11 = ["scrap/x11", "enigo/x11", "hbb_common/x11", "base/x11", "rdev/x11"]
+# PipeWire / portal capture. The scrap crate already had this feature.
+wayland = ["scrap/wayland"]
+# Embedded image only: Weston node, headless file transfer. Not for upstream.
+yocto = ["scrap/yocto"]
+# System tray. Off on the image: tao links gdk-x11.
+tray = ["dep:tray-icon", "dep:tao"]
 hwcodec = ["scrap/hwcodec"]
 vram = ["scrap/vram"]
 mediacodec = ["scrap/mediacodec"]
@@ -51,7 +59,7 @@ screencapturekit = ["cpal/screencapturekit"]
 
 [dependencies]
 async-trait = "0.1"
-scrap = { path = "libs/scrap", features = ["wayland"] }
+scrap = { path = "libs/scrap" }
 hbb_common = { path = "libs/hbb_common", features = ["webrtc"] }
 base = { path = "libs/base" }
 serde_derive = "1.0"
@@ -77,7 +85,7 @@ default-net = "0.14"
 wol-rs = "1.0"
 flutter_rust_bridge = { version = "=1.80", features = ["uuid"], optional = true}
 errno = "0.3"
-rdev = { git = "https://github.com/rustdesk-org/rdev" }
+rdev = { path = "libs/rdev" }
 url = { version = "2.3", features = ["serde"] }
 crossbeam-queue = "0.3"
 hex = "0.4"
@@ -99,7 +107,7 @@ ringbuf = "0.3"
 mac_address = "1.1"
 sciter-rs = { git = "https://github.com/rustdesk-org/rust-sciter", branch = "dyn" }
 sys-locale = "0.3"
-enigo = { path = "libs/enigo", features = [ "with_serde" ] }
+enigo = { path = "libs/enigo", features = ["with_serde"] }
 clipboard = { path = "libs/clipboard" }
 ctrlc = "3.2"
 # arboard = { version = "3.4", features = ["wayland-data-control"] }
@@ -172,8 +180,8 @@ piet-coregraphics = "0.6"
 foreign-types = "0.3"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
-tray-icon = { git = "https://github.com/tauri-apps/tray-icon", version = "0.21.3" }
-tao = { git = "https://github.com/rustdesk-org/tao", branch = "dev" }
+tray-icon = { git = "https://github.com/tauri-apps/tray-icon", version = "0.21.3", optional = true }
+tao = { git = "https://github.com/rustdesk-org/tao", branch = "dev", optional = true }
 image = "0.24"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
@@ -207,17 +215,16 @@ terminfo = "0.8"
 winit = "0.30"
 wayland-client = "0.31"
 xkbcommon-dl = { version = "0.4", features = ["x11"] }
-
-[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
+openssl = { version = "0.10" }
 
 [target.'cfg(target_os = "android")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
 android_logger = "0.13"
 jni = "0.21"
 android-wakelock = { git = "https://github.com/rustdesk-org/android-wakelock" }
 
 [workspace]
-members = ["libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable", "libs/remote_printer"]
+members = ["libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable", "libs/remote_printer", "libs/rdev"]
 exclude = ["vdi/host"]
 
 # Patch libxdo-sys to use a stub implementation that doesn't require libxdo

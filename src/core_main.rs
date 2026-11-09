@@ -366,6 +366,7 @@ pub fn core_main() -> Option<CoreMainAction> {
                 return None;
             }
         } else if args[0] == "--tray" {
+            #[cfg(feature = "tray")]
             if !crate::check_process("--tray", true) {
                 crate::tray::start_tray();
             }

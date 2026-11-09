@@ -54,10 +54,11 @@ mod lang;
 mod port_forward;
 mod port_forward_mux;
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(all(not(any(target_os = "android", target_os = "ios")), feature = "tray"))]
 mod tray;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg_attr(feature = "yocto", path = "whiteboard_yocto.rs")]
 mod whiteboard;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

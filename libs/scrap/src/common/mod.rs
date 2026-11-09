@@ -7,6 +7,20 @@ cfg_if! {
     if #[cfg(quartz)] {
         mod quartz;
         pub use self::quartz::*;
+    } else if #[cfg(all(feature = "wayland", not(x11)))] {
+        mod pixel_buffer;
+        mod wayland;
+        #[path = "linux_wayland.rs"]
+        mod linux;
+        #[cfg(all(target_os = "linux", feature = "drm"))]
+        pub mod drmtap_dl;
+        #[cfg(all(target_os = "linux", feature = "drm"))]
+        pub mod drm_reader;
+        #[cfg(all(target_os = "linux", feature = "drm"))]
+        pub mod drm_render;
+        pub use self::linux::*;
+        pub use self::wayland::set_map_err;
+        pub use self::pixel_buffer::PixelBuffer;
     } else if #[cfg(x11)] {
         cfg_if! {
             if #[cfg(feature="wayland")] {
@@ -268,6 +282,12 @@ pub struct EncodeYuvFormat {
 #[inline]
 pub fn is_x11() -> bool {
     base::platform::linux::is_x11_or_headless()
+}
+
+#[cfg(not(x11))]
+#[inline]
+pub fn is_x11() -> bool {
+    false
 }
 
 #[cfg(x11)]

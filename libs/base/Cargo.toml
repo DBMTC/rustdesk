@@ -9,6 +9,8 @@ edition = "2018"
 
 [features]
 default = []
+# Compile the real X11-or-headless session probe. Without it the probe is false.
+x11 = []
 # The isolated Wayland socket-probe fallback (src/platform/linux/wayland_probe.rs).
 # Off by default so the base Wayland enumeration is untouched; the DRM login-screen
 # build (scrap/drm) turns it on.

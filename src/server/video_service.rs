@@ -472,7 +472,7 @@ fn get_capturer_monitor(
 
     let display = displays.remove(current);
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "x11", feature = "wayland"))]
     if let Display::X11(inner) = &display {
         if let Err(err) = inner.get_shm_status() {
             log::warn!(
@@ -480,6 +480,13 @@ fn get_capturer_monitor(
                 err
             );
         }
+    }
+    #[cfg(all(target_os = "linux", feature = "x11", not(feature = "wayland")))]
+    if let Err(err) = display.get_shm_status() {
+        log::warn!(
+            "MIT-SHM extension not working properly on select X11 server: {:?}",
+            err
+        );
     }
 
     let (origin, width, height) = (display.origin(), display.width(), display.height());

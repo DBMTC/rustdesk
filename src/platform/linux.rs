@@ -286,9 +286,14 @@ thread_local! {
         }
         xdo
     });
+}
+
+#[cfg(feature = "x11")]
+thread_local! {
     static DISPLAY: RefCell<*mut c_void> = RefCell::new(unsafe { XOpenDisplay(std::ptr::null())});
 }
 
+#[cfg(feature = "x11")]
 pub fn right_alt_is_level3_shift() -> ResultType<bool> {
     use hbb_common::x11::{keysym, xlib};
     const XKB_USE_CORE_KBD: c_uint = 0x0100;
@@ -318,6 +323,12 @@ pub fn right_alt_is_level3_shift() -> ResultType<bool> {
     result
 }
 
+#[cfg(not(feature = "x11"))]
+pub fn right_alt_is_level3_shift() -> ResultType<bool> {
+    Ok(false)
+}
+
+#[cfg(feature = "x11")]
 // X11 error event structure for the custom error handler.
 // See: https://www.x.org/releases/current/doc/libX11/libX11/libX11.html#Using-the-Default-Error-Handlers
 #[repr(C)]
@@ -331,16 +342,23 @@ struct XErrorEvent {
     minor_code: u8,
 }
 
+#[cfg(feature = "x11")]
 type XErrorHandler = unsafe extern "C" fn(*mut c_void, *mut XErrorEvent) -> c_int;
 
+#[cfg(feature = "x11")]
 const X11_BAD_WINDOW: u8 = 3;
+#[cfg(feature = "x11")]
 const XDO_SUCCESS: c_int = 0;
+#[cfg(feature = "x11")]
 const XDO_ERROR: c_int = 1;
 
 /// Atomic flag set by the custom X error handler when a BadWindow error occurs.
+#[cfg(feature = "x11")]
 static X_BAD_WINDOW_DETECTED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "x11")]
 static X_UNEXPECTED_ERROR_DETECTED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(feature = "x11")]
 /// Custom X error handler that catches BadWindow errors (error_code == 3) instead of
 /// letting the default handler terminate the process.
 /// See issue: https://github.com/rustdesk/rustdesk/issues/9003
@@ -362,6 +380,7 @@ unsafe extern "C" fn handle_x_error(_display: *mut c_void, event: *mut XErrorEve
     0
 }
 
+#[cfg(feature = "x11")]
 #[link(name = "X11")]
 extern "C" {
     fn XOpenDisplay(display_name: *const c_char) -> *mut c_void;
@@ -369,6 +388,7 @@ extern "C" {
     fn XSetErrorHandler(handler: Option<XErrorHandler>) -> Option<XErrorHandler>;
 }
 
+#[cfg(feature = "x11")]
 #[link(name = "Xfixes")]
 extern "C" {
     // fn XFixesQueryExtension(dpy: *mut c_void, event: *mut c_int, error: *mut c_int) -> c_int;
@@ -377,6 +397,7 @@ extern "C" {
 }
 
 // /usr/include/X11/extensions/Xfixes.h
+#[cfg(feature = "x11")]
 #[repr(C)]
 pub struct xcb_xfixes_get_cursor_image {
     pub x: i16,
@@ -608,6 +629,12 @@ pub fn clip_cursor(_rect: Option<(i32, i32, i32, i32)>) -> bool {
 
 pub fn reset_input_cache() {}
 
+#[cfg(not(feature = "x11"))]
+pub fn get_focused_display(_displays: Vec<DisplayInfo>) -> Option<usize> {
+    None
+}
+
+#[cfg(feature = "x11")]
 pub fn get_focused_display(displays: Vec<DisplayInfo>) -> Option<usize> {
     let mut res = None;
     XDO.with(|xdo| {
@@ -680,6 +707,20 @@ pub fn get_focused_display(displays: Vec<DisplayInfo>) -> Option<usize> {
     res
 }
 
+#[cfg(not(feature = "x11"))]
+pub fn get_cursor() -> ResultType<Option<u64>> {
+    #[cfg(feature = "drm")]
+    if let Some(id) = crate::server::drm_capturer::drm_cursor_id() {
+        if id != scrap::drm_reader::HIDDEN_CURSOR_ID
+            || !crate::server::display_service::has_non_drm_backed_display()
+        {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "x11")]
 pub fn get_cursor() -> ResultType<Option<u64>> {
     // DRM/KMS capture: the hardware cursor arrives over the `_drm` stream, not from XFixes.
     //
@@ -722,6 +763,27 @@ pub fn get_cursor() -> ResultType<Option<u64>> {
     Ok(res)
 }
 
+#[cfg(not(feature = "x11"))]
+pub fn get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
+    #[cfg(feature = "drm")]
+    if let Some(c) = crate::server::drm_capturer::drm_cursor() {
+        if c.id != scrap::drm_reader::HIDDEN_CURSOR_ID
+            || !crate::server::display_service::has_non_drm_backed_display()
+        {
+            let mut cd: CursorData = Default::default();
+            cd.id = c.id;
+            cd.width = c.width;
+            cd.height = c.height;
+            cd.hotx = c.hotx;
+            cd.hoty = c.hoty;
+            cd.colors = c.colors.into();
+            return Ok(cd);
+        }
+    }
+    bail!("cursor image unavailable without X11 ({hcursor})")
+}
+
+#[cfg(feature = "x11")]
 pub fn get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
     // DRM/KMS capture: return the latest hardware-cursor snapshot from the `_drm` stream. Its id may
     // have advanced past `hcursor` between get_cursor() and here, so return the latest rather than
@@ -3114,9 +3176,16 @@ impl Drop for WallPaperRemover {
     }
 }
 
+#[cfg(feature = "x11")]
 #[inline]
 pub fn is_x11() -> bool {
     *IS_X11
+}
+
+#[cfg(not(feature = "x11"))]
+#[inline]
+pub fn is_x11() -> bool {
+    false
 }
 
 #[inline]

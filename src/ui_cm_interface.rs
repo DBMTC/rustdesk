@@ -983,6 +983,47 @@ pub async fn start_listen<T: InvokeUiCM>(
     }
 }
 
+/// File transfer without a `--cm` process. The connection already owns the channel.
+#[cfg(feature = "yocto")]
+pub async fn serve_headless(mut rx: mpsc::UnboundedReceiver<Data>, tx: UnboundedSender<Data>) {
+    let mut write_jobs: Vec<fs::TransferJob> = Vec::new();
+    let mut read_jobs: Vec<fs::TransferJob> = Vec::new();
+    let mut conn_id = 0i32;
+    let mut file_timer =
+        crate::rustdesk_interval(tokio::time::interval(std::time::Duration::from_secs(30)));
+    loop {
+        tokio::select! {
+            data = rx.recv() => {
+                match data {
+                    Some(Data::Login { id, .. }) => {
+                        conn_id = id;
+                    }
+                    Some(Data::FS(fs_msg)) => {
+                        handle_fs(fs_msg, &mut write_jobs, &mut read_jobs, &tx, None, conn_id).await;
+                        if !read_jobs.is_empty() {
+                            file_timer = crate::rustdesk_interval(tokio::time::interval(
+                                std::time::Duration::from_millis(5),
+                            ));
+                        }
+                    }
+                    Some(Data::Close) | None => break,
+                    Some(_) => {}
+                }
+            }
+            _ = file_timer.tick() => {
+                if read_jobs.is_empty() {
+                    file_timer = crate::rustdesk_interval(tokio::time::interval_at(
+                        tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                        std::time::Duration::from_secs(30),
+                    ));
+                } else if let Err(err) = handle_read_jobs_tick(&mut read_jobs, &tx, conn_id).await {
+                    log::error!("file transfer read: {}", err);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(not(any(target_os = "ios")))]
 async fn handle_fs(
     fs: ipc::FS,

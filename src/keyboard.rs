@@ -664,6 +664,10 @@ fn should_block_relative_mouse_shortcut(key: Key, is_press: bool) -> bool {
 }
 
 fn start_grab_loop() {
+    #[cfg(target_os = "linux")]
+    if !crate::platform::is_x11() {
+        return;
+    }
     std::env::set_var("KEYBOARD_ONLY", "y");
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     std::thread::spawn(move || {

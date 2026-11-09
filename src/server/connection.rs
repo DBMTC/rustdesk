@@ -2862,17 +2862,25 @@ impl Connection {
     fn try_start_cm_ipc(&mut self) {
         if let Some(p) = self.start_cm_ipc_para.take() {
             tokio::spawn(async move {
-                #[cfg(windows)]
-                let tx_from_cm_clone = p.tx_from_cm.clone();
-                if let Err(err) = start_ipc(p.rx_to_cm, p.tx_from_cm).await {
-                    log::warn!("ipc to connection manager exit: {}", err);
-                    // https://github.com/rustdesk/rustdesk-server-pro/discussions/382#discussioncomment-10525725, cm may start failed
+                #[cfg(feature = "yocto")]
+                {
+                    log::info!("headless file transfer");
+                    crate::ui_cm_interface::serve_headless(p.rx_to_cm, p.tx_from_cm).await;
+                }
+                #[cfg(not(feature = "yocto"))]
+                {
                     #[cfg(windows)]
-                    if !crate::platform::is_prelogin()
-                        && !err.to_string().contains(crate::platform::EXPLORER_EXE)
-                        && !crate::hbbs_http::sync::is_pro()
-                    {
-                        allow_err!(tx_from_cm_clone.send(Data::CmErr(err.to_string())));
+                    let tx_from_cm_clone = p.tx_from_cm.clone();
+                    if let Err(err) = start_ipc(p.rx_to_cm, p.tx_from_cm).await {
+                        log::warn!("ipc to connection manager exit: {}", err);
+                        // https://github.com/rustdesk/rustdesk-server-pro/discussions/382#discussioncomment-10525725, cm may start failed
+                        #[cfg(windows)]
+                        if !crate::platform::is_prelogin()
+                            && !err.to_string().contains(crate::platform::EXPLORER_EXE)
+                            && !crate::hbbs_http::sync::is_pro()
+                        {
+                            allow_err!(tx_from_cm_clone.send(Data::CmErr(err.to_string())));
+                        }
                     }
                 }
             });

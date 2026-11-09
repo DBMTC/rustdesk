@@ -1,6 +1,7 @@
 use super::xdo::EnigoXdo;
 use crate::{Key, KeyboardControllable, MouseButton, MouseControllable, ResultType};
 use std::io::Read;
+#[cfg(feature = "x11")]
 use tfc::{traits::*, Context as TFC_Context, Key as TFC_Key};
 
 pub type CustomKeyboard = Box<dyn KeyboardControllable + Send>;
@@ -11,6 +12,7 @@ pub type CustomMouce = Box<dyn MouseControllable + Send>;
 pub struct Enigo {
     xdo: EnigoXdo,
     is_x11: bool,
+    #[cfg(feature = "x11")]
     tfc: Option<TFC_Context>,
     custom_keyboard: Option<CustomKeyboard>,
     custom_mouse: Option<CustomMouce>,
@@ -50,12 +52,28 @@ impl Enigo {
     }
 
     /// Clear remapped keycodes
+    #[cfg(feature = "x11")]
     pub fn tfc_clear_remapped(&mut self) {
         if let Some(tfc) = &mut self.tfc {
             tfc.recover_remapped_keycodes();
         }
     }
 
+    /// Clear remapped keycodes. No-op when tfc is not built.
+    #[cfg(not(feature = "x11"))]
+    pub fn tfc_clear_remapped(&mut self) {}
+
+    #[cfg(not(feature = "x11"))]
+    fn tfc_key_click(&mut self, key: Key) -> ResultType {
+        Err(format!("tfc is not built ({:?})", key).into())
+    }
+
+    #[cfg(not(feature = "x11"))]
+    fn tfc_key_down_or_up(&mut self, _key: Key, _down: bool, _up: bool) -> bool {
+        false
+    }
+
+    #[cfg(feature = "x11")]
     fn tfc_key_click(&mut self, key: Key) -> ResultType {
         if let Some(tfc) = &mut self.tfc {
             let res = match key {
@@ -80,6 +98,7 @@ impl Enigo {
         }
     }
 
+    #[cfg(feature = "x11")]
     fn tfc_key_down_or_up(&mut self, key: Key, down: bool, up: bool) -> bool {
         match &mut self.tfc {
             None => false,
@@ -125,6 +144,7 @@ impl Default for Enigo {
         let is_x11 = base::platform::linux::is_x11_or_headless();
         Self {
             is_x11,
+            #[cfg(feature = "x11")]
             tfc: if is_x11 {
                 match TFC_Context::new() {
                     Ok(ctx) => Some(ctx),
@@ -322,6 +342,7 @@ impl KeyboardControllable for Enigo {
     }
 }
 
+#[cfg(feature = "x11")]
 fn convert_to_tfc_key(key: Key) -> Option<TFC_Key> {
     let key = match key {
         Key::Alt => TFC_Key::Alt,
