@@ -736,6 +736,7 @@ pub fn get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
     }
 }
 
+#[cfg(feature = "wayland")]
 fn start_uinput_service() {
     use crate::server::uinput::service;
     std::thread::spawn(|| {
@@ -1124,6 +1125,7 @@ fn force_stop_server() {
 pub fn start_os_service() {
     check_if_stop_service();
     stop_rustdesk_servers();
+    #[cfg(feature = "wayland")]
     start_uinput_service();
 
     std::thread::spawn(|| {

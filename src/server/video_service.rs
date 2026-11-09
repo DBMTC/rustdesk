@@ -451,7 +451,7 @@ fn get_capturer_monitor(
     current: usize,
     portable_service_running: bool,
 ) -> ResultType<CapturerInfo> {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
     {
         if !is_x11() {
             return super::wayland::get_capturer_for_display(current);
@@ -606,9 +606,9 @@ fn run(vs: VideoService) -> ResultType<()> {
     // ensure_inited() is needed because clear() may be called.
     // to-do: wayland ensure_inited should pass current display index.
     // But for now, we do not support multi-screen capture on wayland.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
     super::wayland::ensure_inited()?;
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
     let _wayland_call_on_ret = {
         // Increment active display count when starting
         let _display_count = super::wayland::increment_active_display_count();

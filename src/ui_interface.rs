@@ -716,6 +716,7 @@ pub fn get_error() -> String {
     {
         let dtype = crate::platform::linux::get_display_server();
         if crate::platform::linux::DISPLAY_SERVER_WAYLAND == dtype {
+            #[cfg(feature = "wayland")]
             return crate::server::wayland::common_get_error();
         }
         if dtype != crate::platform::linux::DISPLAY_SERVER_X11 {

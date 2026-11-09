@@ -1171,7 +1171,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                 {
                     Some(opt)
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(all(target_os = "linux", feature = "wayland"))]
                 {
                     let v = if opt.is_empty() {
                         if scrap::wayland::pipewire::is_rdp_session_hold() {
@@ -1184,9 +1184,13 @@ async fn handle(data: Data, stream: &mut Connection) {
                     };
                     Some(v)
                 }
+                #[cfg(all(target_os = "linux", not(feature = "wayland")))]
+                {
+                    Some(opt)
+                }
             } else if value == "clear" {
                 set_local_option(key.clone(), "".to_owned());
-                #[cfg(target_os = "linux")]
+                #[cfg(all(target_os = "linux", feature = "wayland"))]
                 scrap::wayland::pipewire::close_session();
                 Some("".to_owned())
             } else {
