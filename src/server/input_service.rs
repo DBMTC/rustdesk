@@ -1,4 +1,4 @@
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use super::rdp_input::client::{RdpInputKeyboard, RdpInputMouse};
 use super::*;
 use crate::input::*;
@@ -14,7 +14,7 @@ use hbb_common::{get_time, protobuf::EnumOrUnknown};
 use rdev::{self, EventType, Key as RdevKey, KeyCode, RawKey};
 #[cfg(target_os = "macos")]
 use rdev::{CGEventSourceStateID, CGEventTapLocation, VirtualInput};
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 use scrap::wayland::pipewire::RDP_SESSION_INFO;
 #[cfg(target_os = "linux")]
 use std::sync::mpsc;
@@ -751,7 +751,7 @@ static mut VIRTUAL_INPUT_STATE: Option<VirtualInputState> = None;
 // First call set_uinput() will create keyboard and mouse clients.
 // The clients are ipc connections that must live shorter than tokio runtime.
 // Thus this function must not be called in a temporary runtime.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub async fn setup_uinput(minx: i32, maxx: i32, miny: i32, maxy: i32) -> ResultType<()> {
     // Keyboard and mouse both open /dev/uinput
     // TODO: Make sure there's no race
@@ -773,7 +773,7 @@ pub async fn setup_uinput(minx: i32, maxx: i32, miny: i32, maxy: i32) -> ResultT
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub async fn setup_rdp_input() -> ResultType<(), Box<dyn std::error::Error>> {
     let mut en = ENIGO.lock()?;
     // Same as `setup_uinput`: the caller is gated on `wayland_use_rdp_input()`.
@@ -804,7 +804,7 @@ pub async fn setup_rdp_input() -> ResultType<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub async fn update_mouse_resolution(minx: i32, maxx: i32, miny: i32, maxy: i32) -> ResultType<()> {
     set_uinput_resolution(minx, maxx, miny, maxy).await?;
 
@@ -826,7 +826,7 @@ pub async fn update_mouse_resolution(minx: i32, maxx: i32, miny: i32, maxy: i32)
     .await?
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 async fn set_uinput_resolution(minx: i32, maxx: i32, miny: i32, maxy: i32) -> ResultType<()> {
     super::uinput::client::set_resolution(minx, maxx, miny, maxy).await
 }
@@ -1321,15 +1321,15 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
             // On Wayland with uinput, the client sends coordinates in the layout it was
             // told at session init. If the compositor has since moved a monitor, correct
             // them onto the current layout. https://github.com/rustdesk/rustdesk/issues/15601
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
             let uinput = wayland_use_uinput();
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
             let (mx, my) = if uinput {
                 super::display_service::remap_wayland_uinput_coord(evt.x, evt.y)
             } else {
                 (evt.x, evt.y)
             };
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(all(target_os = "linux", feature = "wayland")))]
             let (mx, my) = (evt.x, evt.y);
             en.mouse_move_to(mx, my);
             // Only the uinput point is in the layout space the calibration measures in.

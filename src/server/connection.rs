@@ -2176,7 +2176,7 @@ impl Connection {
                     res.set_peer_info(pi);
                     sub_service = true;
 
-                    #[cfg(target_os = "linux")]
+                    #[cfg(all(target_os = "linux", feature = "wayland"))]
                     {
                         // use rdp_input when uinput is not available in wayland. Ex: flatpak
                         if input_service::wayland_use_rdp_input() {
@@ -7108,7 +7108,7 @@ mod raii {
                 display_service::restore_resolutions();
                 #[cfg(windows)]
                 let _ = virtual_display_manager::reset_all();
-                #[cfg(target_os = "linux")]
+                #[cfg(all(target_os = "linux", feature = "wayland"))]
                 if self.1 == AuthConnType::Remote || self.1 == AuthConnType::ViewCamera {
                     wayland::try_close_portal_session();
                 }

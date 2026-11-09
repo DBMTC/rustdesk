@@ -44,13 +44,13 @@ if #[cfg(not(target_os = "ios"))] {
 mod clipboard_service;
 #[cfg(target_os = "android")]
 pub use clipboard_service::is_clipboard_service_ok;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) mod wayland;
 #[cfg(all(target_os = "linux", feature = "drm"))]
 pub(crate) mod drm_capturer;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub mod uinput;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub mod rdp_input;
 #[cfg(target_os = "linux")]
 pub mod dbus;
@@ -616,7 +616,7 @@ impl Drop for Server {
         for s in self.services.values() {
             s.join();
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", feature = "wayland"))]
         wayland::clear();
     }
 }
@@ -726,7 +726,7 @@ pub async fn start_server(is_server: bool, no_server: bool) {
             log::warn!("drm: could not spawn the availability warm ({err}); skipping it");
         }
         input_service::fix_key_down_timeout_loop();
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", feature = "wayland"))]
         if input_service::wayland_use_uinput() {
             allow_err!(input_service::setup_uinput(0, 1920, 0, 1080).await);
         }

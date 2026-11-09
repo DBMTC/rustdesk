@@ -1704,7 +1704,7 @@ pub fn main_get_main_display() -> SyncReturn<String> {
             }
         }
 
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", feature = "wayland"))]
         if is_linux_wayland {
             let displays = scrap::wayland::display::get_displays();
             if let Some(display) = displays.displays.get(displays.primary) {
