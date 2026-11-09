@@ -8,6 +8,7 @@
 use crate::{Key, KeyboardControllable, MouseButton, MouseControllable};
 
 use hbb_common::libc::c_int;
+#[cfg(feature = "x11")]
 use hbb_common::x11::xlib::{Display, XCloseDisplay, XGetPointerMapping, XOpenDisplay};
 use libxdo_sys::{self, xdo_t, CURRENTWINDOW};
 use std::{borrow::Cow, ffi::CString};
@@ -45,6 +46,12 @@ const MIN_POINTER_BUTTONS: usize = 9;
 /// diagnosable. `XSetPointerMapping` cannot extend the button count (its
 /// length must match `XGetPointerMapping`), so we only diagnose here.
 fn check_x11_button_map() {
+    #[cfg(not(feature = "x11"))]
+    {
+        return;
+    }
+    #[cfg(feature = "x11")]
+    {
     // Skip on non-X11 sessions to avoid noisy "XOpenDisplay failed" warnings
     // on pure Wayland or headless environments without $DISPLAY.
     if std::env::var_os("DISPLAY").is_none() {
@@ -75,6 +82,7 @@ fn check_x11_button_map() {
             "X11 pointer has only {nbuttons} buttons (need {MIN_POINTER_BUTTONS}); \
              back/forward side buttons may not work until a device with more buttons is added"
         );
+    }
     }
 }
 

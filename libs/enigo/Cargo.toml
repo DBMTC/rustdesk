@@ -22,13 +22,13 @@ appveyor = { repository = "pythoneer/enigo-85xiy" }
 serde = { version = "1.0", optional = true }
 serde_derive = { version = "1.0", optional = true }
 log = "0.4"
-rdev = { git = "https://github.com/rustdesk-org/rdev" }
+rdev = { git = "https://github.com/DBMTC/rdev", default-features = false }
 tfc = { git = "https://github.com/DBMTC/The-Fat-Controller", branch = "master", optional = true }
 hbb_common = { path = "../hbb_common" }
 base = { path = "../base" }
 
 [features]
-x11 = ["dep:tfc", "tfc/x11", "base/x11"]
+x11 = ["dep:tfc", "tfc/x11", "base/x11", "hbb_common/x11", "rdev/x11"]
 with_serde = ["serde", "serde_derive"]
 
 [target.'cfg(target_os = "windows")'.dependencies]

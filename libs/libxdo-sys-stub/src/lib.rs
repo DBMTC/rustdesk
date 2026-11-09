@@ -5,13 +5,15 @@
 //! (e.g., Wayland-only environments).
 
 use hbb_common::{
-    libc::{c_char, c_int, c_uint},
+    libc::{c_char, c_int, c_uint, c_ulong},
     libloading::{Library, Symbol},
     log,
 };
 use std::sync::OnceLock;
 
-pub use hbb_common::x11::xlib::{Display, Screen, Window};
+pub enum Display {}
+pub enum Screen {}
+pub type Window = c_ulong;
 
 #[repr(C)]
 pub struct xdo_t {

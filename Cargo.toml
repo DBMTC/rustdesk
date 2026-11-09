@@ -28,7 +28,7 @@ use_dasp = ["dasp"]
 flutter = ["flutter_rust_bridge"]
 default = ["use_dasp", "x11", "wayland", "tray"]
 # X11 capture and input. Off for a Wayland-only build; `is_x11()` is then false.
-x11 = ["scrap/x11", "enigo/x11", "base/x11"]
+x11 = ["scrap/x11", "enigo/x11", "hbb_common/x11", "base/x11", "rdev/x11"]
 # PipeWire / portal capture. The scrap crate already had this feature.
 wayland = ["scrap/wayland"]
 # Embedded image only: Weston node, headless file transfer. Not for upstream.
@@ -85,7 +85,7 @@ default-net = "0.14"
 wol-rs = "1.0"
 flutter_rust_bridge = { version = "=1.80", features = ["uuid"], optional = true}
 errno = "0.3"
-rdev = { git = "https://github.com/rustdesk-org/rdev" }
+rdev = { git = "https://github.com/DBMTC/rdev", default-features = false }
 url = { version = "2.3", features = ["serde"] }
 crossbeam-queue = "0.3"
 hex = "0.4"
