@@ -1207,34 +1207,52 @@ fn weston_pipewire_node() -> String {
 
 #[cfg(feature = "yocto")]
 fn ensure_remote_input_session() {
-    {
-        let existing = match RDP_SESSION_INFO.lock() {
-            Ok(guard) => guard,
-            Err(_) => return,
-        };
-        if existing.is_some() {
-            return;
-        }
+  {
+    let existing = match RDP_SESSION_INFO.lock() {
+      Ok(guard) => guard,
+      Err(_) => return,
+    };
+    if existing.is_some() {
+      return;
     }
-    match request_remote_desktop(false) {
-        Ok((conn, fd, streams, session, is_support_restore_token)) => {
-            let mut guard = match RDP_SESSION_INFO.lock() {
-                Ok(guard) => guard,
-                Err(_) => return,
-            };
-            if guard.is_none() {
-                *guard = Some(RdpSessionInfo {
-                    conn: Arc::new(conn),
-                    streams,
-                    fd,
-                    session,
-                    is_support_restore_token,
-                    resolution: Arc::new(Mutex::new(None)),
-                });
-            }
-        }
-        Err(err) => warn!("remote input session was not opened ({})", err),
+  }
+  match request_remote_desktop(false) {
+    Ok((conn, fd, streams, session, is_support_restore_token)) => {
+      let mut guard = match RDP_SESSION_INFO.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+      };
+      if guard.is_none() {
+        *guard = Some(RdpSessionInfo {
+          conn: Arc::new(conn),
+          streams,
+          fd,
+          session,
+          is_support_restore_token,
+          resolution: Arc::new(Mutex::new(None)),
+        });
+      }
     }
+    Err(err) => warn!("remote input session was not opened ({})", err),
+  }
+}
+
+#[cfg(feature = "yocto")]
+fn ensure_remote_input_session_with_retry() {
+  const ATTEMPTS: u32 = 30;
+  for attempt in 0..ATTEMPTS {
+    ensure_remote_input_session();
+    let has_session = RDP_SESSION_INFO
+      .lock()
+      .map(|g| g.is_some())
+      .unwrap_or(false);
+    if has_session {
+      return;
+    }
+    if attempt + 1 < ATTEMPTS {
+      std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+  }
 }
 
 /// Weston stays the KMS client and mirrors the output onto a PipeWire node.
@@ -1275,7 +1293,7 @@ pub fn get_capturables() -> Result<Vec<PipeWireCapturable>, Box<dyn Error>> {
     #[cfg(feature = "yocto")]
     match weston_node_capturables() {
         Ok(list) if !list.is_empty() => {
-            ensure_remote_input_session();
+            ensure_remote_input_session_with_retry();
             return Ok(list);
         }
         Ok(_) => {}
@@ -1421,15 +1439,23 @@ pub fn fill_displays(
     }
 
     let mut rdp_connection = RDP_SESSION_INFO.lock().unwrap();
+    let all_displays = get_displays();
     let rdp_info = match rdp_connection.as_mut() {
         Some(res) => res,
         None => {
-            // Unreachable
+            #[cfg(feature = "yocto")]
+            if all_displays.displays.len() <= 1 {
+                shared_displays.iter_mut().next().map(|d| {
+                    if let crate::Display::WAYLAND(d) = d {
+                        d.0.primary = true;
+                    }
+                });
+                return Ok(());
+            }
             bail!("RDP session info is None when filling display positions.");
         }
     };
 
-    let all_displays = get_displays();
     if !HAS_POSITION_ATTR.load(Ordering::SeqCst) {
         if all_displays.displays.len() > 1 {
             debug!("Multiple Wayland displays detected, adjusting stream positions accordingly.");
