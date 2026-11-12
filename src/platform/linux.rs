@@ -1693,13 +1693,13 @@ where
 
     unsafe {
         command.pre_exec(move || {
-            if libc::initgroups(user_c.as_ptr(), gid) != 0 {
+            if hbb_common::libc::initgroups(user_c.as_ptr(), gid) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            if libc::setgid(gid) != 0 {
+            if hbb_common::libc::setgid(gid) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            if libc::setuid(uid_n) != 0 {
+            if hbb_common::libc::setuid(uid_n) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
