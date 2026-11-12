@@ -1139,7 +1139,12 @@ fn try_start_server_(desktop: Option<&Desktop>) -> ResultType<Option<Child>> {
                 envs,
             )
         }
-        None => Ok(Some(crate::run_me(vec!["--server"])?)),
+        None => {
+            #[cfg(feature = "yocto")]
+            bail!("yocto build refuses to start --server as root");
+            #[cfg(not(feature = "yocto"))]
+            Ok(Some(crate::run_me(vec!["--server"])?))
+        }
     }
 }
 
@@ -1348,6 +1353,11 @@ pub fn start_os_service() {
             stop_server(&mut user_server);
             // try start subprocess "--server"
             // No need to check is_display_changed here.
+            #[cfg(feature = "yocto")]
+            {
+                stop_server(&mut server);
+            }
+            #[cfg(not(feature = "yocto"))]
             if should_start_server(
                 true,
                 false,
@@ -1409,8 +1419,14 @@ pub fn start_os_service() {
                 &mut last_restart,
                 &mut user_server,
             ) {
-                force_stop_server();
-                start_server(Some(&desktop), &mut user_server);
+                #[cfg(feature = "yocto")]
+                let ready = desktop.yocto_session_ready();
+                #[cfg(not(feature = "yocto"))]
+                let ready = true;
+                if ready {
+                    force_stop_server();
+                    start_server(Some(&desktop), &mut user_server);
+                }
             }
         } else {
             force_stop_server();
@@ -1646,6 +1662,52 @@ fn is_opensuse() -> bool {
     false
 }
 
+#[cfg(feature = "yocto")]
+fn run_as_user_setuid<I, K, V>(
+    arg: Vec<&str>,
+    uid: String,
+    username: String,
+    cmd: PathBuf,
+    envs: I,
+) -> ResultType<Option<Child>>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    use hbb_common::libc::{gid_t, uid_t};
+    use std::ffi::CString;
+    use std::os::unix::process::CommandExt;
+
+    let user = get_user_by_name(&username).ok_or_else(|| anyhow!("Unknown user {username}"))?;
+    let uid_n: uid_t = uid
+        .parse()
+        .map_err(|_| anyhow!("Invalid uid {uid}"))?;
+    let gid: gid_t = user.primary_group_id();
+    let user_c = CString::new(username.as_str())?;
+
+    let mut command = Command::new(cmd);
+    command.args(arg);
+    command.env("XDG_RUNTIME_DIR", format!("/run/user/{uid}"));
+    command.envs(envs);
+
+    unsafe {
+        command.pre_exec(move || {
+            if libc::initgroups(user_c.as_ptr(), gid) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::setgid(gid) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::setuid(uid_n) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(Some(command.spawn()?))
+}
+
 pub fn run_as_user<I, K, V>(
     arg: Vec<&str>,
     user: Option<(String, String)>,
@@ -1665,56 +1727,64 @@ where
         bail!("No valid uid");
     }
 
-    let xdg = &format!("XDG_RUNTIME_DIR=/run/user/{uid}");
-    if *SUDO_E_PRESERVES_ENV {
-        // Original logic: use sudo -E to preserve environment
-        let mut args = vec![xdg, "-u", &username, cmd.to_str().unwrap_or("")];
-        args.append(&mut arg.clone());
-        // -E is required to preserve env
-        args.insert(0, "-E");
-        let task = Command::new("sudo").envs(envs).args(args).spawn()?;
-        Ok(Some(task))
-    } else {
-        // Fallback: sudo -u username env VAR=VALUE ... cmd args
-        // For systems where sudo -E is not supported (e.g., Ubuntu 25.10+)
-        //
-        // SECURITY: No shell is involved here (we use execve-style argv).
-        // Environment is passed via `env` arguments,
-        // so there is no shell injection vector.
-        //
-        // Only accept portable env var names (POSIX portable character set for shells).
-        // Most legitimate env vars follow [A-Za-z_][A-Za-z0-9_]* convention.
-        // Variables with dots (e.g., "java.home") are Java system properties, not env vars.
-        // Being restrictive here is intentional for security in this sudo context.
-        fn is_valid_env_key(key: &str) -> bool {
-            let mut it = key.chars();
-            match it.next() {
-                Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
-                _ => return false,
+    #[cfg(feature = "yocto")]
+    {
+        return run_as_user_setuid(arg, uid, username, cmd, envs);
+    }
+
+    #[cfg(not(feature = "yocto"))]
+    {
+        let xdg = &format!("XDG_RUNTIME_DIR=/run/user/{uid}");
+        if *SUDO_E_PRESERVES_ENV {
+            // Original logic: use sudo -E to preserve environment
+            let mut args = vec![xdg, "-u", &username, cmd.to_str().unwrap_or("")];
+            args.append(&mut arg.clone());
+            // -E is required to preserve env
+            args.insert(0, "-E");
+            let task = Command::new("sudo").envs(envs).args(args).spawn()?;
+            Ok(Some(task))
+        } else {
+            // Fallback: sudo -u username env VAR=VALUE ... cmd args
+            // For systems where sudo -E is not supported (e.g., Ubuntu 25.10+)
+            //
+            // SECURITY: No shell is involved here (we use execve-style argv).
+            // Environment is passed via `env` arguments,
+            // so there is no shell injection vector.
+            //
+            // Only accept portable env var names (POSIX portable character set for shells).
+            // Most legitimate env vars follow [A-Za-z_][A-Za-z0-9_]* convention.
+            // Variables with dots (e.g., "java.home") are Java system properties, not env vars.
+            // Being restrictive here is intentional for security in this sudo context.
+            fn is_valid_env_key(key: &str) -> bool {
+                let mut it = key.chars();
+                match it.next() {
+                    Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+                    _ => return false,
+                }
+                it.all(|c| c.is_ascii_alphanumeric() || c == '_')
             }
-            it.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        }
 
-        let mut sudo = Command::new("sudo");
-        sudo.arg("-u").arg(&username).arg("--").arg("env").arg(xdg);
+            let mut sudo = Command::new("sudo");
+            sudo.arg("-u").arg(&username).arg("--").arg("env").arg(xdg);
 
-        for (k, v) in envs {
-            let key = k.as_ref().to_string_lossy();
-            if !is_valid_env_key(&key) {
-                log::warn!("Skipping environment variable with invalid key: '{}'. Only [A-Za-z_][A-Za-z0-9_]* are allowed in sudo context.", key);
-                continue;
+            for (k, v) in envs {
+                let key = k.as_ref().to_string_lossy();
+                if !is_valid_env_key(&key) {
+                    log::warn!("Skipping environment variable with invalid key: '{}'. Only [A-Za-z_][A-Za-z0-9_]* are allowed in sudo context.", key);
+                    continue;
+                }
+                // IMPORTANT: do NOT add shell quotes here; `Command` does not invoke a shell.
+                // Passing KEY=VALUE as a single argv element is safe and preserves spaces.
+                let mut arg_os = OsString::from(&*key);
+                arg_os.push("=");
+                arg_os.push(v.as_ref());
+                sudo.arg(arg_os);
             }
-            // IMPORTANT: do NOT add shell quotes here; `Command` does not invoke a shell.
-            // Passing KEY=VALUE as a single argv element is safe and preserves spaces.
-            let mut arg = OsString::from(&*key);
-            arg.push("=");
-            arg.push(v.as_ref());
-            sudo.arg(arg);
-        }
 
-        sudo.arg(cmd).args(arg);
-        let task = sudo.spawn()?;
-        Ok(Some(task))
+            sudo.arg(cmd).args(arg);
+            let task = sudo.spawn()?;
+            Ok(Some(task))
+        }
     }
 }
 
@@ -2367,6 +2437,18 @@ mod desktop {
         #[inline]
         pub fn is_wayland(&self) -> bool {
             self.protocol == DISPLAY_SERVER_WAYLAND
+        }
+
+        /// Embedded image: wait until PipeWire/portal autolaunch has published session env.
+        #[cfg(feature = "yocto")]
+        pub fn yocto_session_ready(&self) -> bool {
+            if self.username.is_empty() || self.uid.is_empty() {
+                return false;
+            }
+            if self.is_wayland() {
+                return !self.wl_display.is_empty() && !self.dbus.is_empty();
+            }
+            !self.display.is_empty()
         }
 
         #[inline]
